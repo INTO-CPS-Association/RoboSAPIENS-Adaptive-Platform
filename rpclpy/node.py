@@ -15,6 +15,7 @@ from rpclpy.LoggingAndTracking import LoggingAndTrackingHandler
 KEY_EVENT_MANAGER_CONFIG = "Event_Manager_Config"
 KEY_MESSAGE_MANAGER_CONFIG = "Message_Manager_Config"
 KEY_LOGGER_CONFIG = "Logger_Config"
+KEY_OBSERVATION_CONFIG = "Observation_Config"
 KEY_KNOWLEDGE_CONFIG = "Knowledge_Config"
 KEY_LOG_LEVEL = "log_level"
 KEY_LOG_FORMAT = "format"
@@ -38,10 +39,11 @@ MSG_REGISTER_EVENT_CALLBACK = "Registered callback for event: {}"
 
 
 class Node:
-    def __init__(self, config, verbose=False):
+    def __init__(self, config, verbose=False, *, observation_backend=None):
         # self.config = self.load_config(config)
         self.config = config
         self.logger = self._initialize_logger()
+        self._observation = self._initialize_observation(observation_backend)
         self.knowledge = self._initialize_knowledge()  # Initialize knowledge within the component
         self.event_manager = self._initialize_event_manager()
         self.message_manager = self._initialize_message_manager()
@@ -86,6 +88,27 @@ class Node:
         )
         return KnowledgeManager(self.config[KEY_KNOWLEDGE_CONFIG])
 
+    def _initialize_observation(self, backend):
+        """Attach rpio_observation when ``Observation_Config`` is present."""
+        config = self.config.get(KEY_OBSERVATION_CONFIG)
+        if config is None:
+            return None
+        from rpclpy.rpio_observation.errors import ObservationError
+        from rpclpy.rpio_observation.journal import MemoryJournal, RedisJournal
+        from rpclpy.rpio_observation.observation import NodeObservation
+        knowledge = self.config[KEY_KNOWLEDGE_CONFIG]
+        if knowledge["knowledge_type"] == "redis" and backend is None:
+            backend = RedisJournal(knowledge, config["namespace"])
+        elif knowledge["knowledge_type"] != "local" or not isinstance(backend, MemoryJournal):
+            raise ObservationError("observation needs redis Knowledge or local Knowledge "
+                                   "with observation_backend=MemoryJournal()")
+        return NodeObservation(self.__class__.__name__, config, backend)
+
+    @property
+    def observation_failed(self):
+        """True once any observation error or callback failure occurred."""
+        return self._observation is not None and self._observation.failed
+
     def _initialize_event_manager(self):
         """Initialize the Event Manager based on the config."""
         self.logger.info(MSG_INITIALIZING_EVENT_MANAGER)
@@ -99,6 +122,8 @@ class Node:
     def start(self):
         """Start the component and enable Event."""
         self.logger.info(MSG_STARTING.format(self.__class__.__name__))
+        if self._observation is not None:
+            self._observation.start()
         if self.event_manager:
             self.event_manager.start()
         if self.message_manager:
@@ -111,10 +136,30 @@ class Node:
             self.event_manager.stop()
         if self.message_manager:
             self.message_manager.stop()
-            
+        if self._observation is not None:
+            self._observation.backend.close()
 
-    def publish_event(self, event_key, message=None):
-        """Publish Event using the Event manager."""
+    def _publish_observed(self, kind, manager, topic, message, evidence):
+        stamps = self._observation.publish(kind, topic, message, evidence)
+        wire = dict(message or {}, uid=str(uuid.uuid4().hex[:8]),
+                    timestamp=datetime.now().isoformat(), **stamps)
+        if manager:
+            manager.publish(topic, json.dumps(wire))
+        else:
+            self.logger.warning(WARN_EVENT_MANAGER_NOT_SET)
+
+    def publish_event(self, event_key, message=None, *, evidence=None):
+        """Publish Event using the Event manager.
+
+        Observed nodes: ``evidence`` maps names to Knowledge objects this
+        activation read or wrote; the Event cites exact versions and is journalled before it is sent.
+        """
+        if self._observation is not None:
+            if not isinstance(event_key, str):
+                instance = event_key()
+                event_key, message = instance.topic, instance.__dict__
+            return self._publish_observed("event", self.event_manager, event_key, message,
+                                          evidence)
         if isinstance(event_key, str):
             # Copy so the caller's dict is not mutated and no state is shared
             # between calls.
@@ -140,8 +185,15 @@ class Node:
 
 
 
-    def publish_message(self, message_key, message=None):
-        """Publish Message using the Message manager."""
+    def publish_message(self, message_key, message=None, *, evidence=None):
+        """Publish Message using the Message manager (see publish_event)."""
+        if self._observation is not None:
+            if not isinstance(message_key, str):
+                instance = message_key if (hasattr(message_key, '__dict__')
+                                           and hasattr(message_key, 'name')) else message_key()
+                message_key, message = getattr(instance, 'topic', instance.name), instance.__dict__
+            return self._publish_observed("message", self.message_manager, message_key,
+                                          message, evidence)
         if isinstance(message_key, str):
             # Copy so the caller's dict is not mutated and no state is shared
             # between calls.
@@ -184,6 +236,8 @@ class Node:
     def register_event_callback(self, event_key, callback):
         """Register a callback for Event manager events (MQTT or Redis)."""
         if self.event_manager:
+            if self._observation is not None:
+                callback = self._observation.wrap("event", event_key, callback)
             self.event_manager.subscribe(event_key, callback)
             self.logger.info(MSG_REGISTER_EVENT_CALLBACK.format(event_key))
         else:
@@ -192,6 +246,8 @@ class Node:
     def register_message_callback(self, event_key, callback):
         """Register a callback for Event manager events (MQTT or Redis)."""
         if self.message_manager:
+            if self._observation is not None:
+                callback = self._observation.wrap("message", event_key, callback)
             self.message_manager.subscribe(event_key, callback)
             self.logger.info(MSG_REGISTER_EVENT_CALLBACK.format(event_key))
         else:
@@ -213,25 +269,12 @@ class Node:
             return self.read_knowledge_as_object(key)
     
     def read_knowledge_as_object(self, cls):
+        if self._observation is not None:
+            return self._observation.read(cls)
         _cls = cls()
         value = self.knowledge.read(_cls.name)
-        # if isinstance(value, str):
-        #     value = json.loads(value)
-        #     # Extract matching arguments based on class __init__
-        # try:
-        #     obj = cls(**value)
-        # except TypeError:
-        #     # Fallback: create empty object and manually set attributes
-        #     obj = cls.__new__(cls)
-
-        #     for key, value in value.items():
-        #         setattr(obj, key, value)
-        #     if hasattr(obj, '__init__'):
-        #         try:
-        #             obj.__init__()
-        #         except TypeError:
-        #             pass  # if __init__ expects parameters we skip calling it
-        # return obj
+        if value is None:
+            return None   # never written: ordinary absence, as for raw reads
         return pickle.loads(value)
 
     def write_knowledge(self, key, value = None):
@@ -244,6 +287,8 @@ class Node:
             return self.write_knowledge_as_object(key)
         
     def write_knowledge_as_object(self, cls):
+        if self._observation is not None:
+            return self._observation.write(cls)
         # """Write a class instance to the Knowledge Manager."""
         # value = json.dumps(cls.__dict__)
         cls.uid = str(uuid.uuid4().hex[:8])
@@ -251,3 +296,12 @@ class Node:
         value = pickle.dumps(cls)
         return self.knowledge.write(cls.name, value)
 
+    def service_started(self, service, request_id=None):
+        """Record that the current observed activation starts providing ``service``."""
+        if self._observation is not None:
+            return self._observation.service(service, request_id, None)
+
+    def service_completed(self, service, request_id=None, outcome="Delivered"):
+        """Record completion (``Delivered`` or ``NotDelivered``) of ``service``."""
+        if self._observation is not None:
+            return self._observation.service(service, request_id, outcome)
