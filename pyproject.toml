@@ -4,12 +4,12 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rpclpy"
-version = "1.0.1"
+version = "1.0.2"
 description = "Python client library for building distributed node-based systems with communication, events, and knowledge management"
 readme = "README.md"
 license = "MIT"
 authors = [
-    {name = "RoboSapiens Team", email = "saharnasimi96@gmail.com"},
+    {name = "RoboSapiens Team", email = "sahar.nasiminezhad@uantwerpen.be"},
 ]
 keywords = ["robotics", "distributed systems", "redis", "pub/sub", "communication", "knowledge management", "MAPE-K"]
 classifiers = [
@@ -58,9 +58,9 @@ all = [
 ]
 
 [project.urls]
-Homepage = "https://github.com/saharnn96/robosapiens-clientlibraries"
-Repository = "https://github.com/saharnn96/robosapiens-clientlibraries"
-Issues = "https://github.com/saharnn96/robosapiens-clientlibraries/issues"
+Homepage = "https://github.com/INTO-CPS-Association/RoboSAPIENS-Adaptive-Platform"
+Repository = "https://github.com/INTO-CPS-Association/RoboSAPIENS-Adaptive-Platform"
+Issues = "https://github.com/INTO-CPS-Association/RoboSAPIENS-Adaptive-Platform/issues"
 
 [tool.setuptools.packages.find]
 where = ["."]
