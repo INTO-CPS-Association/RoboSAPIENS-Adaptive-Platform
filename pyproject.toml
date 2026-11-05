@@ -4,7 +4,7 @@ build-backend = "setuptools.build_meta"
 
 [project]
 name = "rpclpy"
-version = "1.0.3"
+version = "1.0.4"
 description = "Python client library for building distributed node-based systems with communication, events, and knowledge management"
 readme = "README.md"
 license = "LicenseRef-INTO-CPS-Association-Public-License-1.0"
@@ -56,6 +56,9 @@ all = [
     "plotly>=5.0",
 ]
 
+[project.scripts]
+rpio-skills = "rpclpy.skills:main"
+
 [project.urls]
 Homepage = "https://github.com/INTO-CPS-Association/RoboSAPIENS-Adaptive-Platform"
 Repository = "https://github.com/INTO-CPS-Association/RoboSAPIENS-Adaptive-Platform"
@@ -64,3 +67,12 @@ Issues = "https://github.com/INTO-CPS-Association/RoboSAPIENS-Adaptive-Platform/
 [tool.setuptools.packages.find]
 where = ["."]
 include = ["rpclpy*"]
+# Skill folders are data for Claude Code, not Python packages.
+exclude = ["rpclpy.skills.*"]
+
+[tool.setuptools.package-data]
+"rpclpy.skills" = ["**/*"]
+"rpclpy.templates" = ["*.yaml", "*.md"]
+
+[tool.setuptools.exclude-package-data]
+"rpclpy.skills" = ["**/__pycache__/*", "**/*.pyc"]
