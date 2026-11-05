@@ -191,8 +191,8 @@ def lint(spec):
         for ps, body in lambdas(expr):
             captured = spec.references(body) - set(ps)
             if captured:
-                problems.append(("D08", ERROR, line,
-                                 f"lambda in '{name}' captures {sorted(captured)}: the checker hangs with no output. "
+                problems.append(("D08", WARNING, line,
+                                 f"lambda in '{name}' captures {sorted(captured)}: older checker builds hang with no output. "
                                  "Inline the value as a literal"))
         if re.search(r"(?<![\w.])\d+\.(?![\w.])", expr):
             problems.append(("D16", WARNING, line, f"'{name}' has a float with no digits after the point: newer checker builds "
@@ -214,8 +214,8 @@ def lint(spec):
     dependent = spec.input_dependent()
     for name, (_, line) in spec.outputs.items():
         if name in spec.defs and name not in dependent:
-            problems.append(("D07", WARNING, line,
-                             f"out '{name}' depends on no input: checker builds before v0.2.0 flood output and never terminate. Declare it aux"))
+            problems.append(("D07", ERROR, line,
+                             f"out '{name}' depends on no input: on a live run it floods output and never terminates. Declare it aux"))
 
     floats = {n for n, (t, _) in declared.items() if t == "Float"}
     for stream in spec.inputs:
@@ -229,7 +229,7 @@ def lint(spec):
                     or re.search(rf"(?<![\w.])-?\d+\s*{COMPARE}\s*{v}(?![\w.])", expr)
                     or re.search(rf"default\(\s*{v}\[\d+\]\s*,\s*-?\d+\s*\)", expr)):
                 problems.append(("D12", WARNING, line,
-                                 f"'{name}' mixes Float {var} with an Int literal: checker builds before v0.2.0 panic at runtime. Write 1.0, not 1"))
+                                 f"'{name}' mixes Float {var} with an Int literal: older checker builds panic at runtime. Write 1.0, not 1"))
 
     labels = {}
     for name, (typ, line) in spec.outputs.items():

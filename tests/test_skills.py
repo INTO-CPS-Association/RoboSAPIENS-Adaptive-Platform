@@ -65,7 +65,7 @@ def test_no_references_to_a_private_repo():
 
 
 # ---------------------------------------------------------------------------
-# rpclpy-skills install
+# rpio-skills install
 # ---------------------------------------------------------------------------
 def test_install_copies_everything_with_a_version_stamp(tmp_path):
     assert skills.install(cwd=tmp_path) == 0

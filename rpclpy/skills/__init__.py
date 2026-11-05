@@ -2,12 +2,12 @@
 
 Claude Code finds skills in `.claude/skills` and `~/.claude/skills`, not in
 site-packages, and a wheel cannot run anything at install time. So the skills
-ship here as package data, and `rpclpy-skills install` copies them into place.
+ship here as package data, and `rpio-skills install` copies them into place.
 
-    rpclpy-skills list
-    rpclpy-skills install                 # into ./.claude/skills
-    rpclpy-skills install --user          # into ~/.claude/skills
-    rpclpy-skills install tc-integrate --force
+    rpio-skills list
+    rpio-skills install                 # into ./.claude/skills
+    rpio-skills install --user          # into ~/.claude/skills
+    rpio-skills install tc-integrate --force
 """
 import argparse
 import pathlib
@@ -99,7 +99,7 @@ def install(names=None, user=False, force=False, cwd=None):
 
 
 def main(argv=None):
-    parser = argparse.ArgumentParser(prog="rpclpy-skills", description="Install the Claude Code skills bundled with rpclpy.")
+    parser = argparse.ArgumentParser(prog="rpio-skills", description="Install the Claude Code skills bundled with rpclpy.")
     commands = parser.add_subparsers(dest="command", required=True)
     commands.add_parser("list", help="show the bundled skills")
     add = commands.add_parser("install", help="copy skills to ./.claude/skills, or ~/.claude/skills with --user")

@@ -106,6 +106,15 @@ def find_binary(repo):
     return None
 
 
+def runtime_args(binary):
+    """From v0.2.0 the default runtime published no outputs on live Redis input, so ask for async where it can be chosen."""
+    try:
+        text = subprocess.run([binary, "--help"], capture_output=True, text=True, timeout=20).stdout
+    except (OSError, subprocess.SubprocessError):
+        return []
+    return ["--runtime", "async"] if "--runtime" in text else []
+
+
 def output_names(spec):
     with open(spec, encoding="utf-8") as f:
         return re.findall(r"^\s*out\s+([A-Za-z_]\w*)\s*:\s*Bool\b", f.read(), flags=re.M)
@@ -194,7 +203,7 @@ def main(argv=None):
         time.sleep(0.4)
         with open(checker_log, "w") as log:
             procs["checker"] = subprocess.Popen([binary, os.path.abspath(args.spec), "--input-redis-file", os.path.abspath(args.routes),
-                                                 "--redis-output", "--redis-port", str(args.port)],
+                                                 "--redis-output", "--redis-port", str(args.port)] + runtime_args(binary),
                                                 stdout=log, stderr=subprocess.STDOUT, cwd=args.repo)
         time.sleep(args.settle)
         started = ctx.mark()

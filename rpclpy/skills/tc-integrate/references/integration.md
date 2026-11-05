@@ -50,11 +50,10 @@ period and stayed clean for this reason.
 
 ## 3. Silent failure on bad data
 
-This is the most important thing to know about a live monitor. A malformed value makes the checker panic. On builds before
-`v0.2.0` the panic stays **inside one stream**: the process keeps running and most outputs keep updating, but some stop for good.
-On `v0.2.0` and `main`, a `null` value made the whole process exit with code 101, and an int on a `Float` field is accepted. The
-table was measured on an older build with a real seven-output spec, with one fresh checker for each case, one bad message, then a
-real fault:
+This is the most important thing to know about a live monitor. A malformed value makes the checker panic **inside one
+stream**. The process keeps running and most outputs keep updating, but some stop for good. A `null` value does this on an older
+build, `v0.2.0` and `main` with `--runtime async`. The table was measured on the older build with a real seven-output spec, with one
+fresh checker for each case, one bad message, then a real fault:
 
 | Bad message | Panics | Outputs still updating | Real fault detected? |
 |---|---|---|---|
@@ -110,8 +109,11 @@ Live, with the system running. On Windows the checker runs inside WSL:
 cd <checker checkout>
 cargo run --profile dev-fast -- <project>/trustworthiness_specs/<spec>.dsrv \
     --input-redis-file <project>/trustworthiness_specs/<spec>_redis_input.json5 \
-    --redis-output
+    --redis-output --runtime async
 ```
+
+- Pass `--runtime async` on live runs. From `v0.2.0`, the default runtime stayed alive and published no outputs on live Redis input,
+  with no error. Builds from before `v0.2.0` have no need for the flag. `live_check.py` adds it when the build supports it.
 
 - `--redis-port N` applies to the route file too.
 - `--output-stdout` prints rows instead of publishing them. The dashboard needs `--redis-output`.

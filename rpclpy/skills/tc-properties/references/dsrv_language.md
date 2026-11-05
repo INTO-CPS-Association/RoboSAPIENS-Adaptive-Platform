@@ -3,7 +3,9 @@
 The grammar is `src/lang/dsrv/syntax/lalr.lalrpop` in the
 [checker repository](https://github.com/INTO-CPS-Association/robosapiens-trustworthiness-checker). If this file and the grammar
 disagree, the grammar wins. Behaviour differs between checker versions, so this file teaches the forms that run on all of them.
-Version notes compare a build from August 2026 ("older"), `v0.2.0` and `main` at `6e263c1`.
+Version notes compare a build from August 2026 ("older"), `v0.2.0` and `main` at `6e263c1`. Live monitoring needs `--runtime async`
+from `v0.2.0` on, and that runtime behaves differently from the default one, so the notes below give the `--runtime async` result on
+`main`. To make an offline run match live behaviour, pass `--checker "<binary> --runtime async"` to the validator.
 
 ## Contents
 1. Program shape
@@ -71,19 +73,18 @@ Consequences:
 
 | Cause | What happens | Rule |
 |---|---|---|
-| `out` with no input dependency, e.g. `out k: Float` / `k = 1.0` | Older builds: infinite generator that never exits and floods `--redis-output`. `v0.2.0` and `main`: finite | D07 |
-| Lambda body reads an outer stream | Older builds: hangs with no output. Not confirmed on `v0.2.0` or `main` | D08 |
-| `out` or `aux` with no equation | Older builds: panic. `v0.2.0` and `main`: startup error | D02 |
-| `Float` compared with an Int literal, `f > 1` | Older builds: panic. `v0.2.0` and `main`: works | D12 |
+| `out` with no input dependency, e.g. `out k: Float` / `k = 1.0` | Infinite generator that never exits and floods `--redis-output` | D07 |
+| Lambda body reads an outer stream | Older builds: hangs with no output. `main`: works | D08 |
+| `out` or `aux` with no equation | Panic at startup | D02 |
+| `Float` compared with an Int literal, `f > 1` | Older builds: panic. `main`: works | D12 |
 | `x[1]` without `default` | Undefined on the first rows, printed `Deferred` on older builds and `⊥` from `v0.2.0` | D11 |
-| Int on the wire for a `Float` input | Older builds: panic. `v0.2.0` and `main`: accepted | see below |
+| Int on the wire for a `Float` input | Panic. The default runtime on `v0.2.0` and `main` accepts it, so an offline run can miss this | see below |
 | `List.get` past the end, missing struct field, `null` | Panic on all versions | see below |
 | `if n == 0 then 0.0 else List.get(l, n - 1)` on an empty list | Panic: **`if` evaluates both branches**, so it can't guard anything | D15 |
 
-**Panics on live data stop monitoring.** On older builds the process stays alive after a panic and only some outputs stop:
-a single bad message stopped 2 or 3 of 7 outputs, including the aggregate, and a later real violation went undetected. On `v0.2.0`
-and `main` a `null` value made the process exit with code 101. The cause lies on the wire rather than in the spec, so `tc-integrate`
-handles it, but keep it in mind:
+**Panics on live data are silent.** On a live run the process stays alive after a panic, and only some outputs stop. This was
+confirmed on all three versions. A single bad message stopped outputs, including the aggregate, and a later real violation went
+undetected. The cause lies on the wire rather than in the spec, so `tc-integrate` handles it, but keep it in mind:
 
 - Index lists only at positions the publisher always provides.
 - Declare `Float` only for values that are always floats on the wire. In JSON `5` is an Int and `5.0` is a Float.
@@ -155,8 +156,8 @@ Keep lambdas out unless you need them. If you do, they must use only their own p
 | D03 / D04 | E | equation for an undeclared name / for an input |
 | D05 | E | duplicate declaration or equation |
 | D06 | E | reads an undeclared stream |
-| D07 | W | `out` depends on no input: floods on older builds |
-| D08 | E | lambda captures an outer stream |
+| D07 | E | `out` depends on no input |
+| D08 | W | lambda captures an outer stream: hangs on older builds |
 | D10 | W | `out` not `: Bool`, or no dashboard label |
 | D11 | W | history without `default` |
 | D12 | W | Float mixed with an Int literal: panics on older builds |

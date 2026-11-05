@@ -57,7 +57,7 @@ all = [
 ]
 
 [project.scripts]
-rpclpy-skills = "rpclpy.skills:main"
+rpio-skills = "rpclpy.skills:main"
 
 [project.urls]
 Homepage = "https://github.com/INTO-CPS-Association/RoboSAPIENS-Adaptive-Platform"
