@@ -288,9 +288,18 @@ def main(args=None):
     execute_node.register_callbacks()
     execute_node.start()
 
+    # The dashboard's Trustworthiness Properties panel is generic: point
+    # tc_spec_file at your use case's .dsrv and everything else is derived
+    # from it - every `out <name>: Bool` becomes a row, the trailing `// ...`
+    # comment on the declaration is its display label, and declarations
+    # sharing a comment are grouped into one row. The TC checker must run
+    # with --redis-output for the panel to receive values.
+    # TODO: point tc_spec_file at your spec, or drop the kwarg to hide the panel.
     t = threading.Thread(
         target=run_dashboard,
-        kwargs={'host': '127.0.0.1', 'port': 8050, 'debug': False, 'start_trust': True},
+        kwargs={'host': '127.0.0.1', 'port': 8050, 'debug': False, 'start_trust': True,
+                # 'tc_spec_file': 'path/to/your_spec.dsrv',
+                },
         daemon=True
     )
     t.start()

@@ -194,6 +194,248 @@ def _start_trust_thread_once():
     _start_trust_thread_once._started = True
     logger.info("Trust listener thread started")
 
+
+# --- Trustworthiness-checker property panel (generic) ---------------------
+# The dashboard is use-case agnostic: it knows nothing about which properties
+# a deployment monitors. The caller (the application's main script, e.g. a
+# MAPLE-K main) configures the panel through run_dashboard(), either with
+#   tc_spec_file  - path to a .dsrv specification; every `out <name>: Bool`
+#                   becomes one panel row, and
+#   tc_properties - optional {display label: [signal, ...]} grouping that
+#                   overrides / refines the auto-derived rows.
+# The TC checker itself publishes each output on its own Redis pub/sub
+# channel when run with --redis-output; this panel just listens.
+
+_tc_config = {
+    'properties': {},        # {label: [signal names]}
+    'configured': False,
+    'spec_file': None,
+}
+_tc_state = {
+    'signal_values': {},     # {signal: bool}
+    'signal_seen_at': {},    # {signal: time.time()}
+    'property_history': {},  # {label: [(timestamp, True/False/None), ...]}
+    'total_messages': 0,
+    'last_message_at': None,
+}
+_tc_lock = threading.Lock()
+_TC_HISTORY_WINDOW = float(os.getenv('TC_HISTORY_WINDOW_SEC', '30'))
+_TC_HISTORY_BINS = int(os.getenv('TC_HISTORY_BINS', '60'))
+# A signal not re-published within this many seconds is treated as gone:
+# its row falls back to gray instead of freezing on the last green/red.
+_TC_STALE_SEC = float(os.getenv('TC_STALE_SEC', '2'))
+
+
+def _parse_dsrv_bool_outputs(spec_file):
+    """Parse the `out <name>: Bool` declarations of a .dsrv file into panel
+    rows: {label: [signal, ...]}, in declaration order.
+
+    The trailing `// ...` comment on a declaration is its display label, and
+    declarations sharing the same comment group into one row - e.g.
+
+        out v_unsolicited_plan: Bool     // P14 protocol conformance
+        out v_unsolicited_islegit: Bool  // P14 protocol conformance
+
+    becomes one row 'P14 protocol conformance' with two signals. A declaration
+    without a comment gets its own row labelled by the signal name.
+    """
+    import re
+    rows = {}
+    decl = re.compile(
+        r"^\s*out\s+([A-Za-z_][A-Za-z0-9_]*)\s*:\s*Bool\b[^/]*(?://\s*(.*\S))?")
+    try:
+        with open(spec_file, 'r', encoding='utf-8') as f:
+            for line in f:
+                m = decl.match(line)
+                if m:
+                    name = m.group(1)
+                    label = m.group(2) or name
+                    rows.setdefault(label, []).append(name)
+    except Exception as e:
+        logger.error(f"TC panel: cannot parse spec file {spec_file}: {e}")
+    return rows
+
+
+def _tc_resolve_signal(channel, expected_signals):
+    """Map a Redis channel onto a known signal, tolerating routed prefixes
+    like 'nodeA/v_x', 'tc:v_x' or 'monitor.v_x'."""
+    if channel in expected_signals:
+        return channel
+    last_segment = channel.split('/')[-1].split(':')[-1].split('.')[-1]
+    if last_segment in expected_signals:
+        return last_segment
+    for signal in expected_signals:
+        if channel.endswith(signal):
+            return signal
+    return None
+
+
+def _tc_decode_bool(data):
+    """Decode a checker output payload to True/False, or None if not boolean."""
+    try:
+        if isinstance(data, (bytes, bytearray)):
+            data = data.decode('utf-8', errors='ignore')
+    except Exception:
+        pass
+    try:
+        obj = json.loads(data) if isinstance(data, str) else data
+    except Exception:
+        obj = data
+    if isinstance(obj, bool):
+        return obj
+    if isinstance(obj, dict):
+        for key in ('Bool', 'bool', 'value'):
+            if isinstance(obj.get(key), bool):
+                return obj[key]
+    if isinstance(obj, str):
+        v = obj.strip().lower()
+        if v == 'true':
+            return True
+        if v == 'false':
+            return False
+    return None
+
+
+def _tc_listener():
+    expected = {s for signals in _tc_config['properties'].values() for s in signals}
+    if not expected:
+        return
+    pubsub = r.pubsub(ignore_subscribe_messages=True)
+    try:
+        pubsub.psubscribe('*')
+        logger.info(f"TC panel: listening for {len(expected)} property signals")
+        for msg in pubsub.listen():
+            if msg.get('type') not in ('message', 'pmessage'):
+                continue
+            channel = msg.get('channel')
+            if isinstance(channel, bytes):
+                channel = channel.decode('utf-8', errors='ignore')
+            signal = _tc_resolve_signal(str(channel), expected)
+            if signal is None:
+                continue
+            value = _tc_decode_bool(msg.get('data'))
+            if value is None:
+                continue
+            now = time.time()
+            with _tc_lock:
+                _tc_state['signal_values'][signal] = value
+                _tc_state['signal_seen_at'][signal] = now
+                _tc_state['total_messages'] += 1
+                _tc_state['last_message_at'] = now
+    except Exception as e:
+        logger.error(f"TC panel listener error: {e}")
+    finally:
+        try:
+            pubsub.close()
+        except Exception:
+            pass
+
+
+def _start_tc_thread_once():
+    if getattr(_start_tc_thread_once, '_started', False):
+        return
+    t = threading.Thread(target=_tc_listener, name='TCPropertyListener', daemon=True)
+    t.start()
+    _start_tc_thread_once._started = True
+    logger.info("TC property listener thread started")
+
+
+def configure_tc_panel(spec_file=None, properties=None):
+    """Configure the TC property panel. Called by run_dashboard(); may also be
+    called directly before starting the dashboard.
+
+    spec_file  : path to a .dsrv. Rows, labels and grouping are all read from
+                 it - see _parse_dsrv_bool_outputs(). Passing just this is the
+                 normal way to configure the panel.
+    properties : optional {display label: [signal, ...]} override. When given
+                 it replaces the spec-derived row for every signal it names
+                 (spec-derived rows for unnamed signals are kept). Signals not
+                 declared in the spec are kept but logged as a warning.
+    """
+    rows = {}
+    declared_signals = None
+    if spec_file:
+        rows = _parse_dsrv_bool_outputs(spec_file)
+        declared_signals = {s for sigs in rows.values() for s in sigs}
+        _tc_config['spec_file'] = str(spec_file)
+    if properties:
+        if declared_signals is not None:
+            for label, signals in properties.items():
+                unknown = [s for s in signals if s not in declared_signals]
+                if unknown:
+                    logger.warning(f"TC panel: '{label}' references signals "
+                                   f"not declared in {spec_file}: {unknown}")
+            # the explicit grouping replaces spec rows for the signals it names
+            grouped = {s for signals in properties.values() for s in signals}
+            rows = {label: [s for s in sigs if s not in grouped]
+                    for label, sigs in rows.items()}
+            rows = {label: sigs for label, sigs in rows.items() if sigs}
+        rows = {**properties, **rows}
+    if rows:
+        _tc_config['properties'] = rows
+        _tc_config['configured'] = True
+        logger.info(f"TC panel configured with {len(rows)} properties")
+    return rows
+
+
+def _tc_property_state(signals, values, seen_at, now=None, stale_sec=None):
+    """A signal only counts while its last message is younger than stale_sec;
+    afterwards the property falls back to unknown (gray)."""
+    if now is None:
+        now = time.time()
+    if stale_sec is None:
+        stale_sec = _TC_STALE_SEC
+    fresh = [s for s in signals
+             if s in seen_at and (now - seen_at[s]) <= stale_sec]
+    if not fresh:
+        ever_seen = any(s in seen_at for s in signals)
+        return ('STALE' if ever_seen else 'WAITING'), None, 0
+    active = any(values.get(s, False) for s in fresh)
+    suffix = '' if len(fresh) == len(signals) else ' (partial)'
+    return ('VIOLATED' if active else 'OK') + suffix, active, len(fresh)
+
+
+def _tc_color(state_value):
+    if state_value is None:
+        return '#95a5a6'
+    return '#e74c3c' if state_value else '#2ecc71'
+
+
+def _tc_history_background(entries, now, window_sec, bins):
+    """CSS gradient rendering the rolling per-property status timeline."""
+    bins = max(bins, 2)
+    if not entries:
+        return '#95a5a6'
+    start_time = now - window_sec
+    colors = []
+    idx = 0
+    current = None
+    for b in range(bins):
+        sample_t = start_time + ((b + 0.5) / bins) * window_sec
+        while idx < len(entries) and entries[idx][0] <= sample_t:
+            current = entries[idx][1]
+            idx += 1
+        colors.append(_tc_color(current))
+    segments = []
+    run_start = 0
+    for i in range(1, bins + 1):
+        if i == bins or colors[i] != colors[run_start]:
+            left = (run_start / bins) * 100.0
+            right = (i / bins) * 100.0
+            segments.append(f"{colors[run_start]} {left:.2f}% {right:.2f}%")
+            run_start = i
+    return 'linear-gradient(to right, ' + ', '.join(segments) + ')'
+
+
+def _tc_format_age(seconds):
+    if seconds is None:
+        return 'never'
+    if seconds < 1:
+        return '<1s ago'
+    if seconds < 60:
+        return f"{int(seconds)}s ago"
+    return f"{int(seconds // 60)}m {int(seconds % 60)}s ago"
+
 app = dash.Dash(__name__)
 app.title = "RoboSAPIENS Adaptive Platform Dashboard"
 
@@ -263,6 +505,28 @@ app.layout = html.Div([
             'border': '1px solid #e9ecef',
             'height': '420px',
             'position': 'relative'  # anchor for absolute popup
+        })
+    ], style={'marginBottom': '15px'}),
+
+    # Trustworthiness Properties Section (generic; configured via run_dashboard)
+    html.Div([
+        html.Div([
+            html.H3("Trustworthiness Properties",
+                    style={
+                        'color': '#2c3e50',
+                        'marginBottom': '4px',
+                        'fontWeight': '400',
+                        'fontSize': '1.1rem'
+                    }),
+            html.P(id='tc-summary',
+                   style={'color': '#7f8c8d', 'fontSize': '12px', 'margin': '0 0 8px 0'}),
+            html.Div(id='tc-property-cards')
+        ], style={
+            'backgroundColor': '#ffffff',
+            'padding': '15px',
+            'borderRadius': '8px',
+            'boxShadow': '0 2px 8px rgba(0, 0, 0, 0.08)',
+            'border': '1px solid #e9ecef'
         })
     ], style={'marginBottom': '15px'}),
 
@@ -396,7 +660,8 @@ app.layout = html.Div([
     dcc.Interval(id='interval-redis', interval=2000, n_intervals=0),
     dcc.Interval(id='interval-log', interval=1000, n_intervals=0),
     dcc.Interval(id='interval-log-sources', interval=5000, n_intervals=0),  # Check for new sources every 5 seconds
-    dcc.Interval(id='interval-trust', interval=1000, n_intervals=0)  # drive trust popup
+    dcc.Interval(id='interval-trust', interval=1000, n_intervals=0),  # drive trust popup
+    dcc.Interval(id='interval-tc', interval=500, n_intervals=0)  # drive TC property panel
 ], style={
     'backgroundColor': '#f5f6fa',
     'minHeight': '100vh',
@@ -1239,13 +1504,123 @@ def update_trust_popup(_):
     # Hidden when stale/no data
     return {'display': 'none'}, ""
 
-def run_dashboard(host=None, port=None, debug=False, start_trust=True):
-    """Start the Dash app. Importers can call this."""
+# TC property panel updater
+@app.callback(
+    Output('tc-summary', 'children'),
+    Output('tc-property-cards', 'children'),
+    Input('interval-tc', 'n_intervals'),
+    prevent_initial_call=False
+)
+def update_tc_panel(_):
+    if not _tc_config['configured']:
+        return ("No trustworthiness specification configured. Pass tc_spec_file "
+                "(and optionally tc_properties) to run_dashboard()."), []
+
+    now = time.time()
+    with _tc_lock:
+        values = dict(_tc_state['signal_values'])
+        seen_at = dict(_tc_state['signal_seen_at'])
+        total_messages = _tc_state['total_messages']
+        last_message_at = _tc_state['last_message_at']
+
+        # advance each property's rolling status history
+        for label, signals in _tc_config['properties'].items():
+            _, state_value, _ = _tc_property_state(signals, values, seen_at, now)
+            entries = _tc_state['property_history'].setdefault(label, [])
+            if not entries or entries[-1][1] != state_value:
+                entries.append((now, state_value))
+            cutoff = now - _TC_HISTORY_WINDOW - 2.0
+            while len(entries) > 1 and entries[1][0] < cutoff:
+                entries.pop(0)
+        history_snapshot = {label: list(e) for label, e in _tc_state['property_history'].items()}
+
+    publishing = 0
+    active = 0
+    cards = []
+    for label, signals in _tc_config['properties'].items():
+        status, state_value, seen_count = _tc_property_state(signals, values, seen_at, now)
+        if seen_count > 0:
+            publishing += 1
+            if state_value:
+                active += 1
+
+        timeline_bg = _tc_history_background(
+            history_snapshot.get(label, []), now, _TC_HISTORY_WINDOW, _TC_HISTORY_BINS)
+        last_seen = max((seen_at.get(s, 0.0) for s in signals), default=0.0)
+        age = _tc_format_age(now - last_seen if last_seen > 0 else None)
+        signal_text = ', '.join(
+            f"{s}={values.get(s, '?') if s in seen_at else '?'}" for s in signals)
+        status_color = '#e74c3c' if state_value else ('#95a5a6' if state_value is None else '#0b7a32')
+
+        cards.append(html.Div([
+            html.Div(label,
+                     title=signal_text,
+                     style={
+                         'minWidth': '220px',
+                         'maxWidth': '220px',
+                         'fontWeight': '600',
+                         'fontSize': '12px',
+                         'color': '#2c3e50',
+                         'whiteSpace': 'nowrap',
+                         'overflow': 'hidden',
+                         'textOverflow': 'ellipsis'
+                     }),
+            html.Div(style={
+                'height': '14px',
+                'flex': '1',
+                'borderRadius': '6px',
+                'overflow': 'hidden',
+                'background': timeline_bg,
+                'border': '1px solid #d0d0d0'
+            }),
+            html.Div(status, style={
+                'minWidth': '90px',
+                'textAlign': 'right',
+                'fontSize': '12px',
+                'fontWeight': '700',
+                'color': status_color
+            }),
+            html.Div(age, style={
+                'minWidth': '70px',
+                'textAlign': 'right',
+                'fontSize': '11px',
+                'color': '#7f8c8d'
+            })
+        ], style={
+            'display': 'flex',
+            'alignItems': 'center',
+            'gap': '8px',
+            'padding': '4px 6px',
+            'borderBottom': '1px solid #f0f0f0'
+        }))
+
+    n_props = len(_tc_config['properties'])
+    spec_note = f" | Spec: {_tc_config['spec_file']}" if _tc_config['spec_file'] else ""
+    summary = (f"Rolling {int(_TC_HISTORY_WINDOW)}s timeline - green: holds, red: violated, "
+               f"gray: waiting or stale (>{_TC_STALE_SEC:.0f}s) | Live: {publishing}/{n_props} | "
+               f"Active violations: {active}/{n_props} | "
+               f"Messages: {total_messages} | Last: {_tc_format_age(now - last_message_at if last_message_at else None)}"
+               f"{spec_note}")
+    return summary, cards
+
+
+def run_dashboard(host=None, port=None, debug=False, start_trust=True,
+                  tc_spec_file=None, tc_properties=None):
+    """Start the Dash app. Importers can call this.
+
+    tc_spec_file / tc_properties configure the generic Trustworthiness
+    Properties panel; they are use-case data and belong to the caller (the
+    application's main script), never to this module. See configure_tc_panel().
+    """
     dash_host = host or os.getenv('DASH_HOST', '0.0.0.0')
     dash_port = int(port or os.getenv('DASH_PORT', '8050'))
     # start trust thread when requested (safe to call multiple times)
     if start_trust:
         _start_trust_thread_once()
+    if tc_spec_file or tc_properties:
+        configure_tc_panel(spec_file=tc_spec_file, properties=tc_properties)
+    if _tc_config['configured']:
+        _start_tc_thread_once()
     logger.info(f"Starting Dash server on {dash_host}:{dash_port} (debug={debug})")
     app.run(host=dash_host, port=dash_port, debug=debug)
 

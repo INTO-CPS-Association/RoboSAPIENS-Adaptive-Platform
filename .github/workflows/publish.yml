@@ -23,6 +23,25 @@ jobs:
           python -m pip install --upgrade pip build
           python -m build
 
+      - name: Check the wheel contents
+        run: |
+          python - <<'PY'
+          import glob, zipfile
+          names = zipfile.ZipFile(glob.glob("dist/*.whl")[0]).namelist()
+          required = [
+              "rpclpy/skills/__init__.py",
+              "rpclpy/skills/rpclpy-port/SKILL.md",
+              "rpclpy/skills/rpclpy-port/scripts/check_rpclpy_api.py",
+              "rpclpy/skills/tc-properties/SKILL.md",
+              "rpclpy/skills/tc-integrate/SKILL.md",
+              "rpclpy/templates/Config_template.yaml",
+              "rpclpy/rpio_observation/observation.py",
+          ]
+          missing = [name for name in required if name not in names]
+          if missing:
+              raise SystemExit(f"the wheel is missing: {missing}")
+          PY
+
       - uses: actions/upload-artifact@v4
         with:
           name: python-package-distributions

@@ -1,4 +1,4 @@
-__version__ = "1.0.3"
+__version__ = "1.0.4"
 
 from rpclpy.node import Node
 from rpclpy.CommunicationManager import CommunicationManager
