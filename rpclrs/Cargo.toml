@@ -4,7 +4,7 @@ version = "1.0.0"
 edition = "2021"
 authors = ["RoboSapiens"]
 description = "RoboSapiens Client Library for Rust - Node communication with Redis"
-license = "MIT"
+license-file = "../LICENSE.md"
 
 [dependencies]
 redis = "0.23"

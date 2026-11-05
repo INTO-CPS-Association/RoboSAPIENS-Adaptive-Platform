@@ -1,13 +1,14 @@
 [build-system]
-requires = ["setuptools>=61.0", "wheel"]
+requires = ["setuptools>=77.0", "wheel"]
 build-backend = "setuptools.build_meta"
 
 [project]
 name = "rpclpy"
-version = "1.0.2"
+version = "1.0.3"
 description = "Python client library for building distributed node-based systems with communication, events, and knowledge management"
 readme = "README.md"
-license = "MIT"
+license = "LicenseRef-INTO-CPS-Association-Public-License-1.0"
+license-files = ["LICENSE.md"]
 authors = [
     {name = "RoboSapiens Team", email = "sahar.nasiminezhad@uantwerpen.be"},
 ]

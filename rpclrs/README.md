@@ -85,4 +85,4 @@ cargo test
 
 ## License
 
-MIT License
+This software is owned by [The INTO-CPS Association](https://into-cps.org/) and is available under [the INTO-CPS License](../LICENSE.md).
