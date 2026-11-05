@@ -18,23 +18,6 @@ RAP is developed in the [RoboSAPIENS](https://robosapiens-eu.tech/) project, a E
 
 Every system built with RAP follows the same loop.
 
-```mermaid
-flowchart LR
-    S["Your system<br/>(robot, machine, process)"]
-
-    subgraph L["MAPLE-K loop"]
-        direction LR
-        M[Monitor] --> A[Analysis] --> P[Plan] --> V[Legitimate] --> E[Execute]
-        V -. rejected .-> P
-    end
-
-    K[("Knowledge<br/>shared by all stages")]
-
-    S -- readings --> M
-    E -- changes --> S
-    L <--> K
-```
-
 | Stage | Question it answers | Example: a pump |
 |---|---|---|
 | **Monitor** | What is happening? | Store the latest pressure |
