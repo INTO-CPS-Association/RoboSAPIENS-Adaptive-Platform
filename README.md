@@ -446,6 +446,18 @@ for configuration, run/capture lifecycle and failure semantics. Without `Observa
 behaviour is unchanged, except that reading a typed Knowledge object that was
 never written returns `None` instead of failing.
 
+
+
+### Future plans: towards a verifiable architecture
+
+- **Hidden service boundaries.** Declare services in `Observation_Config` (trigger topic, service ID, deadline) and let the observation wrapper emit `ServiceStarted` and `ServiceCompleted` from the callback's outcome. Engineers would no longer call `service_started` and `service_completed` themselves. Add an optional `@service("...")` decorator and a `with self.service("..."):` context manager for partial-callback services. Close a service with `NotDelivered` automatically when a callback fails.
+- **Single source of truth for specs and config.** Generate `Observation_Config` (services, deadlines, evidence slots) from the `.dsrv` specs, or the reverse, and fail the build when a spec names a service that no node provides.
+- **Structural MAPLE-K contract.** Base classes for Monitor, Analysis, Plan, Legitimate and Execute that declare their input and output topics and the Knowledge they read and write, so evidence slots and service boundaries are derived rather than hand-written.
+- **Typed Knowledge access only.** Route every read and write through the typed object API so causality (which version produced which) is always recorded, and flag raw key access with a lint rule.
+- **Static architecture check.** Extend the `rpclpy-port` checker to build the topic and Knowledge graph and verify that there are no orphan topics, that every loop passes through Legitimate before Execute, and that every required service has a provider.
+- **Journal replay in CI.** Record journals from real runs and replay them through the Trustworthiness Checker in CI, so a regression in timing or ordering fails the build.
+- **Fail-safe enforcement.** Refuse to Execute while `observation_failed` is set, so unverified actions never reach the managed system.
+
 ## Troubleshooting
 
 | What you see | Likely cause |
