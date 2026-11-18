@@ -397,7 +397,7 @@ Run `rpio-skills install --force` again after upgrading rpclpy, to keep the skil
 | `rpclpy-port` | Turns your existing script, controller or notebook into MAPLE-K nodes, then checks them against the rpclpy API |
 | `tc-properties` | Suggests rules worth monitoring for your system and writes them as a checker spec |
 | `tc-integrate` | Connects a spec to your code: bridge, channels and dashboard. It also finds where spec and code have drifted apart |
-| `integrate-tc-observation` | Connects a spec through `rpio_observation`: journaled phases, Knowledge, outcomes and evidence for replay or live TC checking |
+| `tc-integrate-observation` | Makes a use case observable by the Trustworthiness Checker, driven by its own `.dsrv` spec: callback outcomes, evidence on `publish_event`, `Observation_Config`, schema, codec and trial runner |
 
 ## API reference
 

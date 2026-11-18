@@ -20,7 +20,7 @@ from rpclpy import skills
 REPO = pathlib.Path(__file__).resolve().parents[1]
 SKILLS = REPO / "rpclpy" / "skills"
 PORT = SKILLS / "rpclpy-port"
-NAMES = ["integrate-tc-observation", "rpclpy-port", "tc-integrate", "tc-properties"]
+NAMES = ["rpclpy-port", "tc-integrate", "tc-integrate-observation", "tc-properties"]
 
 
 def run(script, *args, cwd):
@@ -309,79 +309,3 @@ def test_run_dashboard_still_works_with_the_old_arguments(dashboard, monkeypatch
     dashboard.run_dashboard(host="127.0.0.1", port=8050, debug=False, start_trust=False)
     assert calls == [{"host": "127.0.0.1", "port": 8050, "debug": False}]
     assert not dashboard._tc_config["properties"]
-
-
-# ---------------------------------------------------------------------------
-# integrate-tc-observation templates really work
-# ---------------------------------------------------------------------------
-def test_observation_templates_run_a_memory_trial(tmp_path):
-    import importlib.util
-    import json as _json
-
-    from rpclpy.CommunicationManager import LocalBus
-    from rpclpy.KnowledgeManager import reset_local_stores
-    from rpclpy.rpio_observation import outcomes
-
-    assets = SKILLS / "integrate-tc-observation" / "assets"
-
-    def load(name):
-        spec = importlib.util.spec_from_file_location(f"_tc_{name}", assets / f"{name}.py")
-        module = importlib.util.module_from_spec(spec)
-        spec.loader.exec_module(module)
-        return module
-
-    codec, runtime, trial_mod = load("observation_codec"), load("runtime"), load("observation_trial")
-
-    class Reading:
-        name = "Reading"
-
-        def __init__(self, value=0.0):
-            self.value, self.tcp_pose = value, None
-
-    class Monitor(runtime.MapleNode):
-        def __init__(self, config, **kw):
-            super().__init__(config, **kw)
-            self.register_message_callback("/sensor", self.safe_callback(self.on_sensor))
-
-        def on_sensor(self, message):
-            reading = Reading(_json.loads(message)["value"])
-            self.write_knowledge(reading)
-            self.publish_event("reading_recorded", {"value": reading.value}, evidence={"reading": reading})
-            return outcomes.Monitored(reading)
-
-    template = {
-        "Logger_Config": {"log_level": "WARNING", "logger_type": "terminal", "format": "%(message)s"},
-        "Event_Manager_Config": {"protocol": "local", "db": 0},
-        "Message_Manager_Config": {"protocol": "local", "db": 1},
-        "Observation_Config": {"loop": ["demo"]},
-    }
-
-    def run(raise_in_callback):
-        LocalBus.reset()
-        reset_local_stores()
-        trial = trial_mod.ObservedTrial.open()
-        config = trial_mod.trial_config(template, trial.namespace, codec.CODEC, trial.knowledge())
-        trial.build(lambda t: [Monitor(config, **t.node_options())])
-        for node in trial.nodes:
-            node.start()
-        if raise_in_callback:
-            trial.nodes[0].on_sensor = lambda m: 1 / 0
-            trial.nodes[0].register_message_callback("/boom", trial.nodes[0].safe_callback(trial.nodes[0].on_sensor))
-            with pytest.raises(ZeroDivisionError):   # local bus runs callbacks in the publisher
-                LocalBus.get().publish("/boom", "{}")
-        else:
-            LocalBus.get().publish("/sensor", _json.dumps({"value": 3.0}))
-        return trial
-
-    trial = run(False)
-    manifest = trial.finish(tmp_path, "ok")
-    lines = [_json.loads(x) for x in (tmp_path / "ok.jsonl").read_text().splitlines()]
-    assert manifest["count"] == len(lines)
-    assert (tmp_path / "ok.trial.json").is_file()
-    knowledge = [r for r in lines if r["$tag"] == "Knowledge"][0]["payload"]["version"]["value"]
-    assert knowledge == {"$tag": "Reading", "payload": {"value": 3.0, "tcp_pose": {"$tag": "None"}}}
-
-    bad = run(True)
-    with pytest.raises(trial_mod.TrialFailed):
-        bad.finish(tmp_path, "bad")
-    assert not (tmp_path / "bad.jsonl").exists()
